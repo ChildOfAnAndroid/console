@@ -125,17 +125,25 @@ def parse_releases(content):
     return versions
 
 
-def fetch_stable_releases(max_pages=3):
+def fetch_stable_releases(required_minors=None):
+    required_minors = set(required_minors or [])
     versions = []
-    for page in range(1, max_pages + 1):
+    page = 1
+
+    while True:
         content = fetch_page(f"{RELEASES_URL}?per_page=100&page={page}")
         if not content:
             raise ValueError(f"Failed to fetch Envoy Gateway releases page {page}")
         page_versions = parse_releases(content)
         raw = json.loads(_decode(content))
         versions.extend(page_versions)
+
+        if required_minors and required_minors.issubset(latest_patch_by_minor(versions)):
+            break
         if len(raw) < 100:
             break
+        page += 1
+
     unique = sorted(set(versions), key=Version, reverse=True)
     if not unique:
         raise ValueError("No stable Envoy Gateway releases found")
@@ -193,7 +201,7 @@ def scrape():
         raise ValueError("Failed to fetch Envoy Gateway compatibility matrix")
 
     matrix = parse_compatibility_matrix(matrix_content)
-    releases = fetch_stable_releases()
+    releases = fetch_stable_releases(matrix)
     rows = build_rows(matrix, releases)
     update_compatibility_info(
         f"../../static/compatibilities/{APP_NAME}.yaml", rows
