@@ -16,13 +16,20 @@ ROOT = HERE.parents[3]
 fake_utils = types.ModuleType("utils")
 fake_utils.fetch_page = Mock()
 fake_utils.update_compatibility_info = Mock()
-sys.modules.setdefault("utils", fake_utils)
 
-spec = importlib.util.spec_from_file_location(
-    "envoy_gateway_scraper", COMPATIBILITY / "scrapers" / "envoy-gateway.py"
-)
-scraper = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(scraper)
+_original_utils = sys.modules.get("utils")
+sys.modules["utils"] = fake_utils
+try:
+    spec = importlib.util.spec_from_file_location(
+        "envoy_gateway_scraper", COMPATIBILITY / "scrapers" / "envoy-gateway.py"
+    )
+    scraper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(scraper)
+finally:
+    if _original_utils is None:
+        sys.modules.pop("utils", None)
+    else:
+        sys.modules["utils"] = _original_utils
 
 
 def matrix_fixture():
@@ -118,6 +125,27 @@ def test_fetch_stable_releases_paginates_and_sorts(monkeypatch):
     assert [call.args[0] for call in fetch.call_args_list] == [
         scraper.RELEASES_URL + "?per_page=100&page=1",
         scraper.RELEASES_URL + "?per_page=100&page=2",
+    ]
+
+
+def test_fetch_stable_releases_continues_past_three_pages_for_required_family(monkeypatch):
+    full_pages = [
+        [
+            {"tag_name": f"v1.{minor}.{n}", "draft": False, "prerelease": False}
+            for n in range(100)
+        ]
+        for minor in (9, 8, 7)
+    ]
+    fourth = [{"tag_name": "v0.2.0", "draft": False, "prerelease": False}]
+    fetch = Mock(side_effect=[*(json.dumps(page) for page in full_pages), json.dumps(fourth)])
+    monkeypatch.setattr(scraper, "fetch_page", fetch)
+
+    releases = scraper.fetch_stable_releases({"1.9", "0.2"})
+
+    assert "1.9.99" in releases
+    assert "0.2.0" in releases
+    assert [call.args[0] for call in fetch.call_args_list] == [
+        scraper.RELEASES_URL + f"?per_page=100&page={page}" for page in range(1, 5)
     ]
 
 
